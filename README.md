@@ -483,13 +483,13 @@ was opened as the account the step works as, its lists, labels and messages were
 it works was found: the quiz's `data-status`, the plugin's two kinds of confirmation box, the page a completed lesson
 opens next, the tabs of the profile filled by script.
 
-The same round found what the restores must undo:
+That round, and the counts of the site before and after each run, found what the restores must undo:
 
 - a free enrolment records an order of $0.00, and moving that order to the bin does not end the enrolment;
 - merely opening a lesson records progress for an enrolled account;
 - every enrolment and every attempt writes a history row (the plugin's results table, "for history" since
-  LearnPress 4.5.0), and the plugin's own "Assign" and "Unassign" keep it when they remove the enrolment: the review
-  site held 58 such rows after the first rounds of runs, which the counts did not count yet;
+  LearnPress 4.5.0), and the plugin's own "Assign" and "Unassign", like the deletion of an order, keep it when they
+  remove the enrolment;
 - an instructor's published course waits for review.
 
 The plugin's own admin tools ("Assign" and "Unassign" a course, "Reset course progress") and the orders list are what
