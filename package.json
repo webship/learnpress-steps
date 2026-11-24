@@ -1,0 +1,70 @@
+{
+  "name": "@webship-js/learnpress-steps",
+  "version": "2.0.0",
+  "description": "Cucumber step definitions for courses on WordPress with LearnPress, a plugin for webship-js (Playwright and Cucumber): the course list and a course page (its curriculum and instructor), enrolling in a free course, lessons opened and completed, quizzes started, answered, finished, reviewed and retaken, the student's profile (courses, progress, quizzes), the instructor's course editor (a course with a section, a lesson and a quiz) and the course settings. It brings @webship-js/wordpress-steps along for the login and the administration area.",
+  "main": "tests/step-definitions/learnpress-defaults.js",
+  "files": [
+    "tests/step-definitions/",
+    "tests/features/",
+    "README.md",
+    "LICENSE"
+  ],
+  "scripts": {
+    "test": "cucumber-js --config cucumber.js",
+    "test:dry": "cucumber-js --config cucumber.js --dry-run",
+    "test:examples": "node tests/check-examples.js",
+    "test:paths": "node tests/check-paths.js",
+    "test:must-fail": "node tests/check-must-fail.js",
+    "test:chromium": "BROWSER=chromium cucumber-js --config cucumber.js",
+    "test:firefox": "BROWSER=firefox cucumber-js --config cucumber.js",
+    "test:webkit": "BROWSER=webkit cucumber-js --config cucumber.js",
+    "test:headed": "HEADLESS=false cucumber-js --config cucumber.js",
+    "generate-reports": "generate-reports",
+    "test:fast": "SLOW_MO=0 cucumber-js --config cucumber.js"
+  },
+  "keywords": [
+    "webship-js",
+    "learnpress",
+    "wordpress",
+    "lms",
+    "e-learning",
+    "courses",
+    "quizzes",
+    "cucumber",
+    "cucumber-js",
+    "playwright",
+    "bdd",
+    "gherkin",
+    "step-definitions",
+    "e2e-testing"
+  ],
+  "author": "Webship.co",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/webship/learnpress-steps.git"
+  },
+  "bugs": {
+    "url": "https://github.com/webship/learnpress-steps/issues"
+  },
+  "homepage": "https://github.com/webship/learnpress-steps#readme",
+  "publishConfig": {
+    "access": "public"
+  },
+  "engines": {
+    "node": ">= 24.0"
+  },
+  "dependencies": {
+    "@webship-js/wordpress-steps": "^2.2.4"
+  },
+  "peerDependencies": {
+    "webship-js": "^2.0.16"
+  },
+  "devDependencies": {
+    "tsx": "^4.23.0",
+    "webship-js": "^2.0.16"
+  },
+  "overrides": {
+    "@cucumber/cucumber": "^12"
+  }
+}
