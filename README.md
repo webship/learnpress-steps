@@ -209,6 +209,8 @@ Every scenario puts back what it changes when it ends:
 
 - a learner's enrolment and progress (lessons opened and completed, quiz attempts) come back as they were with the
   plugin's own tools: "Assign" for an account that was enrolled (a fresh enrolment), "Unassign" for one that was not;
+- the plugin's history of those enrolments and attempts goes too, with its own "Reset course progress", when every
+  learner of the course is an account of the suite;
 - the order a free enrolment records is deleted;
 - a course an instructor made goes, with its lessons and quiz.
 
@@ -278,9 +280,13 @@ the WordPress pack's (`Given I am a logged in user with the "student" user`, `Gi
   lesson, completes one, takes the quiz), it notes whether the account was enrolled and which orders it had. When the
   scenario ends, whatever its outcome, the manager's session of the site puts the enrolment back with the plugin's own
   admin tools: `assign-user-course` (a fresh enrolment, its progress and attempts gone) for an account that was
-  enrolled, `unassign-user-course` for one that was not. The orders the scenario made are deleted from the orders list,
-  because a free enrolment records an order, and moving it to the bin does not end the enrolment. A course, a lesson or
-  a quiz a step made is deleted for good.
+  enrolled, `unassign-user-course` for one that was not. The plugin keeps a history row of every enrolment and attempt
+  (its results table), and those two tools keep it: first, when the plugin's "Students" list shows that every learner
+  of the course is an account of the users registry, its "Reset course progress" (`reset-data/reset-courses`) removes
+  that history, and the learners it reset get a fresh enrolment too. A course with any other learner keeps the
+  history, and the scenario says so. The orders the scenario made are deleted from the orders list, because a free
+  enrolment records an order, and moving it to the bin does not end the enrolment. A course, a lesson or a quiz a step
+  made is deleted for good.
 - **Failures say what was found.** `The course list does not show "Webship Testing Basics", "Webship Advanced Testing"
   in this order. It shows "Webship Advanced Testing", "Webship Testing Basics".`, with a hint on where to look.
 
@@ -354,13 +360,14 @@ Each lane runs the suite twice and compares what the site holds before the first
 
 - the courses, lessons, quizzes, questions and orders by status;
 - the sections, their items and the quiz questions;
-- each account's enrolments, progress rows and quiz attempts by status, and its orders;
+- the plugin's history rows, and each account's enrolments, progress rows and quiz attempts by status, its orders and
+  its history rows;
 - each course's status and learners.
 
 After a run that was stopped half way, `RESET_ONLY=1 SITE_DIR="$PWD/learnpress-site"
 learnpress-steps/.github/scripts/build-ddev-site.sh` puts the courses back as the build left them:
 
-- the learners' orders, enrolments and progress go, and the student's enrolment comes back;
+- the learners' orders, enrolments, progress and history rows go, and the student's enrolment comes back;
 - the courses, lessons, quizzes and questions named "Webship test …" go;
 - the build's courses are published again.
 
@@ -480,9 +487,13 @@ The same round found what the restores must undo:
 
 - a free enrolment records an order of $0.00, and moving that order to the bin does not end the enrolment;
 - merely opening a lesson records progress for an enrolled account;
+- every enrolment and every attempt writes a history row (the plugin's results table, "for history" since
+  LearnPress 4.5.0), and the plugin's own "Assign" and "Unassign" keep it when they remove the enrolment: the review
+  site held 58 such rows after the first rounds of runs, which the counts did not count yet;
 - an instructor's published course waits for review.
 
-The plugin's own admin tools ("Assign" and "Unassign" a course) and the orders list are what put it all back.
+The plugin's own admin tools ("Assign" and "Unassign" a course, "Reset course progress") and the orders list are what
+put it all back, and the counts check counts the history rows too.
 
 ## License
 

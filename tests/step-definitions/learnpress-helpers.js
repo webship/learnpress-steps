@@ -281,8 +281,12 @@ async function managerSession(world) {
     };
     const users = await api('/wp/v2/users?context=edit&per_page=100');
     const ids = new Map();
-    for (const u of Array.isArray(users.json) ? users.json : []) ids.set(String(u.username || '').toLowerCase(), u.id);
-    return { request, api, admin, ids, root };
+    const logins = new Map();
+    for (const u of Array.isArray(users.json) ? users.json : []) {
+      ids.set(String(u.username || '').toLowerCase(), u.id);
+      if (u.email) logins.set(String(u.email).toLowerCase(), String(u.username || '').toLowerCase());
+    }
+    return { request, api, admin, ids, logins, root };
   })();
   MANAGER_RUNS.set(root, run);
   run.catch(() => MANAGER_RUNS.delete(root));
@@ -328,36 +332,110 @@ async function deleteOrder(world, id) {
  * Before a step changes what an account has of a course (enrols, opens a lesson, completes it, takes the quiz): note
  * whether the account was enrolled and which orders it had, once a scenario, so that the scenario's end puts the
  * enrolment back (fresh, through the plugin's own "Assign" tool) or takes it away ("Unassign"), and deletes the orders
- * the scenario made.
+ * the scenario made. The course is put back once, whichever accounts touched it.
  */
 async function touchCourse(world, handle, course) {
   if (!handle) return;
   if (!world.learningTouched) world.learningTouched = new Map();
-  const key = `${handle}|${course.id}`;
-  if (world.learningTouched.has(key)) return;
-  const entry = { handle, course, enrolled: false, orders: new Set() };
-  world.learningTouched.set(key, entry);
+  if (!world.learningTouched.has(course.id)) {
+    world.learningTouched.set(course.id, { course, entries: new Map() });
+    afterScenario(world, () => restoreCourse(world, world.learningTouched.get(course.id)), true);
+  }
+  const record = world.learningTouched.get(course.id);
+  if (record.entries.has(handle)) return;
+  const entry = { handle, enrolled: false, orders: new Set() };
+  record.entries.set(handle, entry);
   const page = await world.context.request.get(course.link, { failOnStatusCode: false });
   const html = await page.text();
   entry.enrolled = !/button-enroll-course|button-purchase-course/.test(html) && /course-btn-continue|lp-course-progress|course-progress|btn-finish-course|button-retake-course/.test(html);
   const { username } = resolveUser(world, handle);
   entry.orders = await ordersOf(world, username).catch(() => new Set());
-  afterScenario(world, () => restoreCourse(world, entry), true);
 }
 
-async function restoreCourse(world, entry) {
+/** The logins of the users registry, lower case: the accounts of the suite. */
+function registryLogins(world) {
+  const users = (world.parameters && world.parameters.users) || {};
+  return new Set(Object.entries(users).map(([handle, entry]) => String((entry && typeof entry === 'object' && entry.username) || handle).toLowerCase()));
+}
+
+/**
+ * The learners of a course (enrolled or finished), by their address, as the plugin's own "Students" screen lists
+ * them; null when it lists more than a hundred.
+ */
+async function learnersOf(world, courseId) {
   const session = await managerSession(world);
-  const userId = await userIdOf(world, entry.handle);
-  const { username } = resolveUser(world, entry.handle);
-  const problems = [];
-  for (const id of await ordersOf(world, username)) {
-    if (entry.orders.has(id)) continue;
-    await deleteOrder(world, id).catch((err) => problems.push(err.message));
+  const emails = [];
+  for (let paged = 1; paged <= 10; paged += 1) {
+    const answer = await session.api('/lp/v1/load_content_via_ajax', {
+      method: 'POST',
+      data: { callback: { class: 'LearnPress\\TemplateHooks\\Admin\\AdminListStudentsEnrolled', method: 'render_enrolled_students' }, args: { course_id: courseId, paged } },
+    });
+    const html = String((answer.json && answer.json.data && answer.json.data.content) || '');
+    if (answer.status !== 200 || !/lp-enrolled-students-table/.test(html)) {
+      throw new Error(`The plugin's list of the learners of the course #${courseId} did not answer (${answer.status}).`);
+    }
+    const page = [...html.matchAll(/class="lp-email">([^<]*)</g)].map((m) => clean(m[1]).toLowerCase());
+    emails.push(...page);
+    const shown = html.match(/Displaying \d+ to (\d+) of (\d+) student/);
+    if (!page.length || !shown || Number(shown[1]) >= Number(shown[2])) return emails;
   }
-  const tool = entry.enrolled ? 'assign-user-course' : 'unassign-user-course';
-  const answer = await session.api(`/lp/v1/admin/tools/${tool}`, { method: 'POST', data: { data: [{ user_id: userId, course_id: entry.course.id }], page: 1, totalPage: 1 } });
-  if (answer.status !== 200) problems.push(`${tool} answered ${answer.status} for ${username} in "${entry.course.title}"`);
-  if (problems.length) throw new Error(`The course "${entry.course.title}" of ${username} was not put back: ${problems.join('; ')}.`);
+  return null;
+}
+
+/**
+ * What a scenario changed in a course, put back. The plugin keeps a history row of every enrolment and every attempt
+ * (its results table), and its own "Assign" and "Unassign" keep that history, as does the deletion of an order (which
+ * removes the enrolment it made); its "Reset course progress" removes it, for every learner of the course, so it runs
+ * first, while the scenario's enrolments are still there, and only when every learner is an account of the users
+ * registry. Then the orders the scenario's free enrolments made are deleted for good (moving one to the bin does not
+ * end the enrolment), each account that touched the course gets its enrolment back fresh ("Assign") or taken away
+ * ("Unassign"), and every other learner the reset took in gets a fresh enrolment too, as the reset left it without its
+ * history row.
+ */
+async function restoreCourse(world, record) {
+  const session = await managerSession(world);
+  const { course } = record;
+  const problems = [];
+  const touched = new Map();
+  for (const entry of record.entries.values()) touched.set(resolveUser(world, entry.handle).username.toLowerCase(), entry);
+  const fresh = new Set([...touched].filter(([, entry]) => entry.enrolled).map(([login]) => login));
+  const away = new Set([...touched].filter(([, entry]) => !entry.enrolled).map(([login]) => login));
+  let learners = null;
+  try { learners = await learnersOf(world, course.id); } catch (err) { problems.push(err.message); }
+  if (learners) {
+    const suite = registryLogins(world);
+    const outside = learners.filter((email) => !suite.has(session.logins.get(email) || ''));
+    if (outside.length) {
+      problems.push(`the plugin's history of the scenario's enrolments and attempts stays: "${course.title}" has learners that are not accounts of the suite (${outside.join(', ')}), and the plugin's only tool that removes that history resets every learner of a course`);
+    } else {
+      const reset = await session.api(`/lp/v1/admin/tools/reset-data/reset-courses?courseId=${course.id}`);
+      if (reset.status !== 200 || !reset.json || reset.json.status !== 'success') {
+        problems.push(`"Reset course progress" answered ${reset.status} for "${course.title}"`);
+      } else {
+        for (const email of learners) {
+          const login = session.logins.get(email);
+          if (login && !away.has(login)) fresh.add(login);
+        }
+      }
+    }
+  } else if (learners === null && !problems.length) {
+    problems.push(`the plugin's history of the scenario's enrolments and attempts stays: "${course.title}" has more than a hundred learners`);
+  }
+  for (const [login, entry] of touched) {
+    for (const id of await ordersOf(world, login)) {
+      if (entry.orders.has(id)) continue;
+      await deleteOrder(world, id).catch((err) => problems.push(err.message));
+    }
+  }
+  for (const [logins, tool] of [[fresh, 'assign-user-course'], [away, 'unassign-user-course']]) {
+    for (const login of logins) {
+      const userId = session.ids.get(login);
+      if (!userId) { problems.push(`the account "${login}" is not on the site`); continue; }
+      const answer = await session.api(`/lp/v1/admin/tools/${tool}`, { method: 'POST', data: { data: [{ user_id: userId, course_id: course.id }], page: 1, totalPage: 1 } });
+      if (answer.status !== 200) problems.push(`${tool} answered ${answer.status} for ${login} in "${course.title}"`);
+    }
+  }
+  if (problems.length) throw new Error(`The course "${course.title}" was not all put back: ${problems.join('; ')}.`);
 }
 
 /**

@@ -8,10 +8,11 @@
  *                                               (what is there already is kept)
  *   wp eval-file learning-site.php content      the same
  *   wp eval-file learning-site.php reset        put the courses back as the build left them: what a stopped run left
- *                                               behind goes (the students' progress, quiz attempts, "Webship test …"
- *                                               courses), the student's enrolment comes back
+ *                                               behind goes (the students' orders, progress, quiz attempts and their
+ *                                               history, "Webship test …" courses), the student's enrolment comes back
  *   wp eval-file learning-site.php status       say what the courses hold
  *   wp eval-file learning-site.php counts       the counts a test run must leave as it found them (CI compares them)
+ *   wp eval-file learning-site.php orphans      remove what the plugin's tables keep of deleted accounts and courses
  *
  * Everything is made with the plugin's own models (CourseService, CoursePostModel::add_section,
  * CourseSectionModel::add_items, LessonPostModel, QuizPostModel, QuestionPostModel, UserCourseModel), so the counts and
@@ -233,8 +234,9 @@ function webship_delete_course( $course_id ) {
 	$wpdb->delete( $wpdb->learnpress_user_items, array( 'item_id' => $course_id ), array( '%d' ) );
 	$wpdb->delete( $wpdb->learnpress_user_items, array( 'ref_id' => $course_id ), array( '%d' ) );
 	wp_delete_post( $course_id, true );
-	if ( isset( $wpdb->learnpress_courses ) ) {
-		$wpdb->delete( $wpdb->learnpress_courses, array( 'ID' => $course_id ), array( '%d' ) );
+	$courses = $wpdb->prefix . 'learnpress_courses';
+	if ( $wpdb->get_var( $wpdb->prepare( 'SHOW TABLES LIKE %s', $courses ) ) === $courses ) {
+		$wpdb->delete( $courses, array( 'ID' => $course_id ), array( '%d' ) );
 	}
 }
 
@@ -255,8 +257,9 @@ function webship_delete_item( $item_id ) {
 function webship_delete_question( $question_id ) {
 	global $wpdb;
 	$wpdb->delete( $wpdb->learnpress_question_answers, array( 'question_id' => $question_id ), array( '%d' ) );
-	if ( isset( $wpdb->learnpress_question_answer_config ) ) {
-		$wpdb->delete( $wpdb->learnpress_question_answer_config, array( 'question_id' => $question_id ), array( '%d' ) );
+	$config = $wpdb->prefix . 'learnpress_question_answer_config';
+	if ( $wpdb->get_var( $wpdb->prepare( 'SHOW TABLES LIKE %s', $config ) ) === $config ) {
+		$wpdb->delete( $config, array( 'question_id' => $question_id ), array( '%d' ) );
 	}
 	$wpdb->delete( $wpdb->learnpress_quiz_questions, array( 'question_id' => $question_id ), array( '%d' ) );
 	wp_delete_post( $question_id, true );
@@ -283,6 +286,9 @@ function webship_reset() {
 			LP_User_Items_DB::getInstance()->delete_user_items_old( $user_id, (int) $course_id );
 		}
 		$wpdb->delete( $wpdb->learnpress_user_items, array( 'user_id' => $user_id ), array( '%d' ) );
+		// The plugin's history of the account's enrolments and attempts: a row a user item, kept by its own tools when
+		// the user item goes.
+		$wpdb->delete( $wpdb->learnpress_user_item_results, array( 'user_id' => $user_id ), array( '%d' ) );
 	}
 	foreach ( array( LP_COURSE_CPT, LP_LESSON_CPT, LP_QUIZ_CPT, LP_QUESTION_CPT ) as $type ) {
 		// "Webship test " exactly, case and space included: LIKE alone ignores case, and "Webship Testing Basics" is the
@@ -314,8 +320,9 @@ function webship_reset() {
 
 /**
  * What a run must leave as it found it, one count a line, the same on every run of the same site: the courses by
- * status, the lessons, quizzes, questions, sections and their items, the orders by status, and each account's
- * enrolments, progress rows and quiz attempts by status. CI compares it before and after the suite.
+ * status, the lessons, quizzes, questions, sections and their items, the orders by status, the plugin's history rows
+ * (one an enrolment or an attempt), and each account's enrolments, progress rows and quiz attempts by status, its
+ * orders and its history rows. CI compares it before and after the suite.
  */
 function webship_counts() {
 	global $wpdb;
@@ -327,6 +334,7 @@ function webship_counts() {
 	$lines[] = 'sections: ' . (int) $wpdb->get_var( "SELECT COUNT(*) FROM {$wpdb->learnpress_sections}" );
 	$lines[] = 'section items: ' . (int) $wpdb->get_var( "SELECT COUNT(*) FROM {$wpdb->learnpress_section_items}" );
 	$lines[] = 'quiz questions: ' . (int) $wpdb->get_var( "SELECT COUNT(*) FROM {$wpdb->learnpress_quiz_questions}" );
+	$lines[] = 'history rows: ' . (int) $wpdb->get_var( "SELECT COUNT(*) FROM {$wpdb->learnpress_user_item_results}" );
 	foreach ( array( 'administrator', 'instructor', 'student', 'student2' ) as $login ) {
 		$user_id = webship_user_id( $login );
 		if ( ! $user_id ) {
@@ -336,12 +344,57 @@ function webship_counts() {
 		$rows = $wpdb->get_results( $wpdb->prepare( "SELECT item_type, status, graduation, COUNT(*) AS n FROM {$wpdb->learnpress_user_items} WHERE user_id = %d GROUP BY item_type, status, graduation ORDER BY item_type, status, graduation", $user_id ) );
 		$lines[] = "{$login} items: " . ( $rows ? implode( ', ', array_map( function ( $r ) { return trim( "{$r->item_type} {$r->status} {$r->graduation}" ) . " {$r->n}"; }, $rows ) ) : 'none' );
 		$lines[] = "{$login} orders: " . count( webship_orders_of( $user_id ) );
+		$rows    = $wpdb->get_results( $wpdb->prepare( "SELECT item_type, COUNT(*) AS n FROM {$wpdb->learnpress_user_item_results} WHERE user_id = %d GROUP BY item_type ORDER BY item_type", $user_id ) );
+		$lines[] = "{$login} history: " . ( $rows ? implode( ', ', array_map( function ( $r ) { return "{$r->item_type} {$r->n}"; }, $rows ) ) : 'none' );
 	}
 	foreach ( webship_courses() as $slug => $course ) {
 		$course_id = webship_find_post( $course['title'], LP_COURSE_CPT );
 		$lines[] = "{$course['title']}: " . ( $course_id ? get_post_status( $course_id ) . ', ' . (int) $wpdb->get_var( $wpdb->prepare( "SELECT COUNT(DISTINCT user_id) FROM {$wpdb->learnpress_user_items} WHERE item_id = %d AND item_type = %s", $course_id, LP_COURSE_CPT ) ) . ' learners' : 'not on the site' );
 	}
 	echo implode( "\n", $lines ) . "\n";
+}
+
+/**
+ * What the plugin's own tables keep of what WordPress deleted from outside the plugin's screens. An account deleted
+ * with WP-CLI takes its posts along (the instructor's courses, lessons, quizzes and questions), and the plugin's tables
+ * keep the account's enrolments, progress and history, its orders, the sections of its courses and their items, and
+ * the questions of its quizzes. The Workspace's cancel of the test users runs this once the accounts are gone.
+ */
+function webship_orphans() {
+	global $wpdb;
+	$gone = array();
+	$orders = $wpdb->get_col( $wpdb->prepare(
+		"SELECT p.ID FROM {$wpdb->posts} p JOIN {$wpdb->postmeta} m ON m.post_id = p.ID AND m.meta_key = '_user_id' LEFT JOIN {$wpdb->users} u ON u.ID = m.meta_value WHERE p.post_type = %s AND m.meta_value > 0 AND u.ID IS NULL",
+		LP_ORDER_CPT
+	) );
+	foreach ( $orders as $order_id ) {
+		webship_delete_order( (int) $order_id );
+	}
+	$gone['orders'] = count( $orders );
+	$items  = $wpdb->learnpress_user_items;
+	$meta   = $wpdb->learnpress_user_itemmeta;
+	$result = $wpdb->learnpress_user_item_results;
+	$gone['enrolments and progress'] = (int) $wpdb->query( "DELETE ui FROM {$items} ui LEFT JOIN {$wpdb->users} u ON u.ID = ui.user_id WHERE ui.user_id > 0 AND u.ID IS NULL" )
+		+ (int) $wpdb->query( "DELETE ui FROM {$items} ui LEFT JOIN {$wpdb->posts} p ON p.ID = ui.item_id WHERE p.ID IS NULL" );
+	$wpdb->query( "DELETE m FROM {$meta} m LEFT JOIN {$items} ui ON ui.user_item_id = m.learnpress_user_item_id WHERE ui.user_item_id IS NULL" );
+	$gone['history rows'] = (int) $wpdb->query( "DELETE r FROM {$result} r LEFT JOIN {$wpdb->users} u ON u.ID = r.user_id WHERE r.user_id > 0 AND u.ID IS NULL" );
+	$sections = $wpdb->learnpress_sections;
+	$gone['sections'] = (int) $wpdb->query( "DELETE s FROM {$sections} s LEFT JOIN {$wpdb->posts} p ON p.ID = s.section_course_id WHERE p.ID IS NULL" );
+	$gone['section items'] = (int) $wpdb->query( "DELETE si FROM {$wpdb->learnpress_section_items} si LEFT JOIN {$sections} s ON s.section_id = si.section_id LEFT JOIN {$wpdb->posts} p ON p.ID = si.item_id WHERE s.section_id IS NULL OR p.ID IS NULL" );
+	$gone['quiz questions'] = (int) $wpdb->query( "DELETE qq FROM {$wpdb->learnpress_quiz_questions} qq LEFT JOIN {$wpdb->posts} q ON q.ID = qq.quiz_id LEFT JOIN {$wpdb->posts} p ON p.ID = qq.question_id WHERE q.ID IS NULL OR p.ID IS NULL" );
+	$answers = $wpdb->learnpress_question_answers;
+	$wpdb->query( "DELETE am FROM {$wpdb->learnpress_question_answermeta} am LEFT JOIN {$answers} a ON a.question_answer_id = am.learnpress_question_answer_id LEFT JOIN {$wpdb->posts} p ON p.ID = a.question_id WHERE a.question_answer_id IS NULL OR p.ID IS NULL" );
+	$gone['answers'] = (int) $wpdb->query( "DELETE a FROM {$answers} a LEFT JOIN {$wpdb->posts} p ON p.ID = a.question_id WHERE p.ID IS NULL" );
+	$config = $wpdb->prefix . 'learnpress_question_answer_config';
+	if ( $wpdb->get_var( $wpdb->prepare( 'SHOW TABLES LIKE %s', $config ) ) === $config ) {
+		$wpdb->query( "DELETE c FROM {$config} c LEFT JOIN {$wpdb->posts} p ON p.ID = c.question_id WHERE p.ID IS NULL" );
+	}
+	$courses = $wpdb->prefix . 'learnpress_courses';
+	if ( $wpdb->get_var( $wpdb->prepare( 'SHOW TABLES LIKE %s', $courses ) ) === $courses ) {
+		$wpdb->query( "DELETE c FROM {$courses} c LEFT JOIN {$wpdb->posts} p ON p.ID = c.ID WHERE p.ID IS NULL" );
+	}
+	$left = array_filter( $gone );
+	echo $left ? '  removed what the deleted accounts and courses left: ' . implode( ', ', array_map( function ( $what, $n ) { return "{$n} {$what}"; }, array_keys( $left ), $left ) ) . "\n" : "  nothing left by deleted accounts or courses\n";
 }
 
 wp_set_current_user( 1 );
@@ -361,7 +414,10 @@ switch ( $webship_mode ) {
 	case 'counts':
 		webship_counts();
 		break;
+	case 'orphans':
+		webship_orphans();
+		break;
 	default:
-		fwrite( STDERR, "Unknown mode {$webship_mode}: content, reset, status or counts.\n" );
+		fwrite( STDERR, "Unknown mode {$webship_mode}: content, reset, status, counts or orphans.\n" );
 		exit( 1 );
 }
